@@ -186,10 +186,10 @@ int hue_offset = 40;
 int min_value = 100;
 int min_saturation = 100;
 int opening_size = 1;
-int min_area_perc = 4;
+int min_area_perc = 1;
 int max_area_perc = 100;
 
-Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturation, int min_value)
+Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturation, int min_value, int max_value = 255)
 {
 	Mat hsvImg;
 	cv::cvtColor(src, hsvImg, CV_BGR2HSV);
@@ -198,16 +198,16 @@ Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturat
 	cv::Scalar lower(hue_start, min_saturation, min_value);
 	if (hue_start + hue_offset < 180)
 	{
-		cv::Scalar upper(hue_start + hue_offset, 255, 255);
+		cv::Scalar upper(hue_start + hue_offset, 255, max_value);
 		cv::inRange(hsvImg, lower, upper, mask);
 		return mask;
 	}
 
 	int remaining_hue = (hue_start + hue_offset) % 180;
 
-	cv::Scalar  middle1(179, 255, 255);
+	cv::Scalar  middle1(179, 255, max_value);
 	cv::Scalar  middle2(0, min_saturation, min_value);
-	cv::Scalar  upper(remaining_hue, 255, 255);
+	cv::Scalar  upper(remaining_hue, 255, max_value);
 
 	Mat mask_extended;
 
@@ -280,17 +280,16 @@ void guiDetectRoadSign()
 	}
 }
 
-Mat markRoadSigns(Mat binary_image, Mat src, int min_area, int max_area, Vec3b color)
+std::vector<Rect> markRoadSigns(Mat binary_image, int min_area, int max_area)
 {
 	Mat labeled_image;
 	Mat stats;
 	Mat centroids;
 	int labelCount = connectedComponentsWithStats(binary_image, labeled_image, stats, centroids);
 
-	// where the road signs will be marked with red rectangles.
-	Mat dst = src.clone();
-
 	const int total_image_area = binary_image.cols * binary_image.rows;
+
+	std::vector<Rect> road_sign_boxes;
 
 	for(int labelIndex = 0; labelIndex < labelCount; labelIndex++)
 	{
@@ -306,20 +305,31 @@ Mat markRoadSigns(Mat binary_image, Mat src, int min_area, int max_area, Vec3b c
 		int width = stats.at<int>(labelIndex, CC_STAT_WIDTH);
 		int height = stats.at<int>(labelIndex, CC_STAT_HEIGHT);
 		Rect bounding_box = Rect(left, top, width, height);
+		
+		double ratio_h_w = (double)height / width;
+		double ratio_w_h = (double)width / height;
 
-		rectangle(dst, bounding_box, color);
+		double const max_ratio = 5;
+
+		if (ratio_h_w > max_ratio || ratio_w_h > max_ratio)
+		{
+			// if rectangle is too elonagated, don't draw it.
+			continue;
+		}
+
+		road_sign_boxes.push_back(bounding_box);
 	}
 
-	return dst;
+	return road_sign_boxes;
 }
 
-const int red_hue_start = 170;
-const int yellow_hue_start = 26;
-const int blue_hue_start = 105;
+const int red_hue_start = 165;
+const int yellow_hue_start = 20;
+const int blue_hue_start = 100;
 
-const int red_offset = 20;
-const int yellow_offset = 7;
-const int blue_offset = 25;
+const int red_offset = 25;
+const int yellow_offset = 20;
+const int blue_offset = 35;
 
 Mat adaptiveColorSegmentation(Mat image, Mat mask)
 {
@@ -339,17 +349,18 @@ Mat adaptiveColorSegmentation(Mat image, Mat mask)
 
 	// saturation should be higher
 	int lower_sat = mean_sat - std_sat;
-	int lower_value = mean_value - 2*std_value;
+	int lower_value = mean_value - std_value;
+	int upper_value = mean_value + std_value;
 
 	lower_sat = max(lower_sat, 100);
-	lower_value = max(lower_value, 65);
+	lower_value = max(lower_value, 15);
 
 	CV_DbgAssert(0 <= lower_sat && lower_sat <= 255);
 	CV_DbgAssert(0 <= lower_value && lower_value <= 255);
-
+	CV_DbgAssert(0 <= upper_value && upper_value <= 255);
 
 	Vec3b lower = Vec3b(0, lower_sat, lower_value);
-	Vec3b upper = Vec3b(179, 255, 255);
+	Vec3b upper = Vec3b(179, 255, upper_value);
 
 	Mat adaptiveMask;
 	inRange(hsvImg, lower, upper, adaptiveMask);
@@ -386,27 +397,20 @@ Mat autoDetectRoadSignCore(Mat src)
 	{
 		int start_hue = hue_starts[i];
 		int offset_hue = hue_offsets[i];
-		//HSV image
 
-		// minimum saturation/value is 40
-		Mat mask = convertToBinaryColor(src, start_hue, offset_hue, 10, 10);
+		Mat mask = convertToBinaryColor(src, start_hue, offset_hue, 100, 25, 250);
 		Mat mask_adapted = adaptiveColorSegmentation(src, mask);
-
-		//opening
-		const int dialtion_size = opening_size;
-		const int element_size = 2 * dialtion_size + 1;
-
-		Mat element = getStructuringElement(MORPH_RECT, Size(element_size, element_size));
-
-		Mat mask_eroded,mask_opened;
-		erode(mask_adapted, mask_eroded, element);
-		dilate(mask_eroded, mask_opened, element);
 
 		int total_area = src.rows * src.cols;
 		int min_area = (total_area * min_area_perc) / 1000;
 		int max_area = (total_area * max_area_perc) / 1000;
 
-		dst = markRoadSigns(mask_opened, dst, min_area, max_area, colors[i]);
+		std::vector<Rect> signs = markRoadSigns(mask_adapted, min_area, max_area);
+
+		for(Rect bounding_box : signs)
+		{
+			rectangle(dst, bounding_box, colors[i]);
+		}
 	}
 	
 	return dst;
@@ -426,6 +430,24 @@ void autoDetectRoadSign()
 	}
 }
 
+void testDetectRoadSign()
+{
+	char folder_name[MAX_PATH];
+	openFolderDlg(folder_name);
+	FileGetter getter = FileGetter(folder_name, "jpg");
+
+	char fname[MAX_PATH];
+	while (getter.getNextAbsFile(fname))
+	{
+		Mat src = imread(fname);
+		Mat result = autoDetectRoadSignCore(src);
+
+		imshow("result", result);
+		waitKey();
+	}
+	
+}
+
 int main()
 {
 	int op;
@@ -439,6 +461,7 @@ int main()
 		printf(" 3 - Convert image to binary based on yellow\n");
 		printf(" 4 - GUI road sign detection\n");
 		printf(" 5 - Auto road sign detection\n");
+		printf(" 6 - Test sign detection\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -458,6 +481,9 @@ int main()
 				break;
 			case 5:
 				autoDetectRoadSign();
+				break;
+			case 6:
+				testDetectRoadSign();
 				break;
 				
 		}

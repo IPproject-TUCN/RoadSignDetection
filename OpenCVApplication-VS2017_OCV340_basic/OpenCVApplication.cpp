@@ -185,17 +185,14 @@ int hue_start = 160;
 int hue_offset = 40;
 int min_value = 100;
 int min_saturation = 100;
-int opening_size = 2;
-int min_area_perc = 5;
+int opening_size = 1;
+int min_area_perc = 4;
 int max_area_perc = 100;
 
 Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturation, int min_value)
 {
-	
 	Mat hsvImg;
 	cv::cvtColor(src, hsvImg, CV_BGR2HSV);
-
-	//define lower and upper bounds for meaningful colors in hsv
 
 	Mat mask;
 	cv::Scalar lower(hue_start, min_saturation, min_value);
@@ -259,7 +256,6 @@ void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
 
 void guiDetectRoadSign()
 {
-	
 	char fname[MAX_PATH];
 	while (openFileDlg(fname))
 	{
@@ -284,6 +280,152 @@ void guiDetectRoadSign()
 	}
 }
 
+Mat markRoadSigns(Mat binary_image, Mat src, int min_area, int max_area, Vec3b color)
+{
+	Mat labeled_image;
+	Mat stats;
+	Mat centroids;
+	int labelCount = connectedComponentsWithStats(binary_image, labeled_image, stats, centroids);
+
+	// where the road signs will be marked with red rectangles.
+	Mat dst = src.clone();
+
+	const int total_image_area = binary_image.cols * binary_image.rows;
+
+	for(int labelIndex = 0; labelIndex < labelCount; labelIndex++)
+	{
+		int area = stats.at<int>(labelIndex, CC_STAT_AREA);
+		if (area < min_area || max_area < area)
+		{
+			// if component is too small or too large don't draw it.
+			continue;
+		}
+
+		int left = stats.at<int>(labelIndex, CC_STAT_LEFT);
+		int top = stats.at<int>(labelIndex, CC_STAT_TOP);
+		int width = stats.at<int>(labelIndex, CC_STAT_WIDTH);
+		int height = stats.at<int>(labelIndex, CC_STAT_HEIGHT);
+		Rect bounding_box = Rect(left, top, width, height);
+
+		rectangle(dst, bounding_box, color);
+	}
+
+	return dst;
+}
+
+const int red_hue_start = 170;
+const int yellow_hue_start = 26;
+const int blue_hue_start = 105;
+
+const int red_offset = 20;
+const int yellow_offset = 7;
+const int blue_offset = 25;
+
+Mat adaptiveColorSegmentation(Mat image, Mat mask)
+{
+	Mat hsvImg;
+	cv::cvtColor(image, hsvImg, CV_BGR2HSV);
+
+	Vec3d means;
+	Vec3d stds;
+	meanStdDev(hsvImg, means, stds, mask);
+	std::cout << "mean" << means << std::endl;
+	std::cout << "stds" << stds << std::endl;
+
+	int mean_sat = (int)means[1];
+	int mean_value = (int)means[2];
+	int std_sat = (int)stds[1];
+	int std_value = (int)stds[2];
+
+	// saturation should be higher
+	int lower_sat = mean_sat - std_sat;
+	int lower_value = mean_value - 2*std_value;
+
+	lower_sat = max(lower_sat, 100);
+	lower_value = max(lower_value, 65);
+
+	CV_DbgAssert(0 <= lower_sat && lower_sat <= 255);
+	CV_DbgAssert(0 <= lower_value && lower_value <= 255);
+
+
+	Vec3b lower = Vec3b(0, lower_sat, lower_value);
+	Vec3b upper = Vec3b(179, 255, 255);
+
+	Mat adaptiveMask;
+	inRange(hsvImg, lower, upper, adaptiveMask);
+
+	Mat finalMask = adaptiveMask & mask;
+
+	return finalMask;
+}
+
+Mat autoDetectRoadSignCore(Mat src)
+{
+	// where the detected road signs will appear.
+	int hue_starts[] = {
+		red_hue_start,
+		yellow_hue_start,
+		blue_hue_start
+	};
+
+	int hue_offsets[] = {
+		red_offset,
+		yellow_offset,
+		blue_offset
+	};
+
+	Vec3b colors[] = {
+		Vec3b(0, 0, 255),
+		Vec3b(0, 255, 255),
+		Vec3b(255, 0, 0)
+	};
+
+	Mat dst = src.clone();
+
+	for(int i = 0; i < 3; i++)
+	{
+		int start_hue = hue_starts[i];
+		int offset_hue = hue_offsets[i];
+		//HSV image
+
+		// minimum saturation/value is 40
+		Mat mask = convertToBinaryColor(src, start_hue, offset_hue, 10, 10);
+		Mat mask_adapted = adaptiveColorSegmentation(src, mask);
+
+		//opening
+		const int dialtion_size = opening_size;
+		const int element_size = 2 * dialtion_size + 1;
+
+		Mat element = getStructuringElement(MORPH_RECT, Size(element_size, element_size));
+
+		Mat mask_eroded,mask_opened;
+		erode(mask_adapted, mask_eroded, element);
+		dilate(mask_eroded, mask_opened, element);
+
+		int total_area = src.rows * src.cols;
+		int min_area = (total_area * min_area_perc) / 1000;
+		int max_area = (total_area * max_area_perc) / 1000;
+
+		dst = markRoadSigns(mask_opened, dst, min_area, max_area, colors[i]);
+	}
+	
+	return dst;
+}
+
+void autoDetectRoadSign()
+{
+	char fname[MAX_PATH];
+	while (openFileDlg(fname))
+	{
+		Mat src = imread(fname);
+
+		Mat with_road_signs = autoDetectRoadSignCore(src);
+
+		imshow("roadsigns", with_road_signs);
+		waitKey();
+	}
+}
+
 int main()
 {
 	int op;
@@ -296,6 +438,7 @@ int main()
 		printf(" 2 - Convert image to binary based on blue\n");
 		printf(" 3 - Convert image to binary based on yellow\n");
 		printf(" 4 - GUI road sign detection\n");
+		printf(" 5 - Auto road sign detection\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -313,7 +456,9 @@ int main()
 			case 4:
 				guiDetectRoadSign();
 				break;
-
+			case 5:
+				autoDetectRoadSign();
+				break;
 				
 		}
 	}

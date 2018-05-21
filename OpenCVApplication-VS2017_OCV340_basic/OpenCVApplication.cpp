@@ -215,6 +215,8 @@ Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturat
 	cv::inRange(hsvImg, lower, middle1, mask);
 	cv::inRange(hsvImg, middle2, upper, mask_extended);
 	return mask | mask_extended;
+	
+
 }
 
 void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
@@ -300,10 +302,10 @@ std::vector<Rect> markRoadSigns(Mat binary_image, int min_area, int max_area)
 			continue;
 		}
 
-		int left = stats.at<int>(labelIndex, CC_STAT_LEFT);
-		int top = stats.at<int>(labelIndex, CC_STAT_TOP);
-		int width = stats.at<int>(labelIndex, CC_STAT_WIDTH);
-		int height = stats.at<int>(labelIndex, CC_STAT_HEIGHT);
+		int left = stats.at<int>(labelIndex, CC_STAT_LEFT) -3;
+		int top = stats.at<int>(labelIndex, CC_STAT_TOP) -3;
+		int width = stats.at<int>(labelIndex, CC_STAT_WIDTH) + 6;
+		int height = stats.at<int>(labelIndex, CC_STAT_HEIGHT) + 6;
 		Rect bounding_box = Rect(left, top, width, height);
 		
 		double ratio_h_w = (double)height / width;
@@ -370,6 +372,49 @@ Mat adaptiveColorSegmentation(Mat image, Mat mask)
 	return finalMask;
 }
 
+bool analyzeInnerShape(Rect bounding_box, Mat src, Mat mask_adapted ) {
+
+	//taking out the region of interest from the binary 
+	Mat srcGray, srcBlur, srcCanny;
+	cvtColor(src, srcGray, CV_BGR2GRAY);
+	blur(srcGray, srcBlur, Size(3, 3));
+	Canny(srcBlur, srcCanny, 40, 150, 3, true);
+	Mat image_region = srcCanny(bounding_box);
+	std::vector<std::vector<Point>> contours;
+	std::vector<Vec4i> hierarchy;
+	//obtaining contours of object held in the Point type array
+	findContours(image_region, contours,hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+
+	//displaying the separate contours
+	
+	Mat dst = Mat::zeros(image_region.rows, image_region.cols, CV_8UC1);
+	
+	
+	int length = 0;
+	for (int i=0; i<contours.size(); i++)
+	{
+		//Scalar color(rand() & 255, rand() & 255, rand() & 255);
+	
+		drawContours(dst, contours, i, 255, 0, 8, hierarchy);
+			
+		std::vector<Point> curve;
+		approxPolyDP(contours[i], curve, 3, true);
+		printf("%d\n",curve.size());
+		if (curve.size() > 20) {
+			return false;
+		}
+		
+		//approxPolyDP()
+	}
+	imshow("contour",dst);
+	printf("\n");
+	waitKey();
+	
+
+	return true;
+
+}
+
 Mat autoDetectRoadSignCore(Mat src)
 {
 	// where the detected road signs will appear.
@@ -405,11 +450,13 @@ Mat autoDetectRoadSignCore(Mat src)
 		int min_area = (total_area * min_area_perc) / 1000;
 		int max_area = (total_area * max_area_perc) / 1000;
 
-		std::vector<Rect> signs = markRoadSigns(mask_adapted, min_area, max_area);
 
+		std::vector<Rect> signs = markRoadSigns(mask_adapted, min_area, max_area);
 		for(Rect bounding_box : signs)
 		{
+			analyzeInnerShape(bounding_box, src, mask_adapted);
 			rectangle(dst, bounding_box, colors[i]);
+			
 		}
 	}
 	
@@ -459,9 +506,10 @@ int main()
 		printf(" 1 - Convert image to binary based on red\n");
 		printf(" 2 - Convert image to binary based on blue\n");
 		printf(" 3 - Convert image to binary based on yellow\n");
-		printf(" 4 - GUI road sign detection\n");
-		printf(" 5 - Auto road sign detection\n");
-		printf(" 6 - Test sign detection\n");
+		//printf(" 4 - Convert image to binary based on white\n");
+		printf(" 5 - GUI road sign detection\n");
+		printf(" 6 - Auto road sign detection\n");
+		printf(" 7 - Test sign detection\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -476,13 +524,13 @@ int main()
 			case 3:
 				convertToBinaryYellow();
 				break;
-			case 4:
+			case 5:
 				guiDetectRoadSign();
 				break;
-			case 5:
+			case 6:
 				autoDetectRoadSign();
 				break;
-			case 6:
+			case 7:
 				testDetectRoadSign();
 				break;
 				

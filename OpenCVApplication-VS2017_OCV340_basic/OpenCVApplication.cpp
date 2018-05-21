@@ -184,10 +184,15 @@ void convertToBinaryBlue() {
 int hue_start = 160;
 int hue_offset = 40;
 int min_value = 100;
+int max_value = 250;
 int min_saturation = 100;
 int opening_size = 1;
 int min_area_perc = 1;
 int max_area_perc = 100;
+
+int bilateral_distance = 5;
+int bilateral_sigma = 2;
+int median_filter_size = 1;
 
 Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturation, int min_value, int max_value = 255)
 {
@@ -219,16 +224,40 @@ Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturat
 
 }
 
-void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
+Mat histogramEqualization(Mat src)
 {
-	if (event != CV_EVENT_LBUTTONDOWN)
-	{
-		return;
-	}
-	Mat src = *(Mat*)data;
+	Mat converted;
+	cvtColor(src, converted, CV_BGR2YCrCb);
 
-	//HSV image
-	Mat mask = convertToBinaryColor(src, hue_start, hue_offset, min_saturation, min_value);
+	std::vector<Mat> channels;
+	split(converted, channels);
+
+	equalizeHist(channels[0], channels[0]);
+
+	Mat equalized;
+	merge(channels, equalized);
+
+	Mat converted_back;
+	cvtColor(equalized, converted_back, CV_YCrCb2BGR);
+
+	return converted_back;
+}
+
+Mat preprocessRoadSign(Mat src)
+{
+	Mat filtered;
+	bilateralFilter(src, filtered, bilateral_distance, bilateral_sigma, bilateral_sigma);
+
+	Mat equalized = histogramEqualization(filtered);
+
+	return equalized;
+}
+
+Mat postProcessBinary(Mat mask)
+{
+	Mat blurred;
+	int filter_size = 2 * median_filter_size + 1;
+	medianBlur(mask, blurred, filter_size);
 
 	//opening
 	const int dialtion_size = opening_size;
@@ -236,50 +265,13 @@ void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
 
 	Mat element = getStructuringElement(MORPH_RECT, Size(element_size, element_size));
 
-	Mat mask_eroded,mask_opened;
-	erode(mask, mask_eroded, element);
+	Mat mask_eroded;
+	erode(blurred, mask_eroded, element);
+
+	Mat mask_opened;
 	dilate(mask_eroded, mask_opened, element);
 
-	int total_area = src.rows * src.cols;
-	int min_area = (total_area * min_area_perc) / 1000;
-	int max_area = (total_area * max_area_perc) / 1000;
-	Mat filtered = filterSmallAndLargeObjects(mask_opened, min_area, max_area);
-	
-	Mat filtered_equalized;
-	equalizeHist(filtered, filtered_equalized);
-
-	Mat labeled;
-	applyColorMap(filtered_equalized, labeled, COLORMAP_JET);
-
-	imshow("input image", src);
-	imshow("only red", mask_opened);
-	imshow("labeled", labeled);
-}
-
-void guiDetectRoadSign()
-{
-	char fname[MAX_PATH];
-	while (openFileDlg(fname))
-	{
-		Mat src = imread(fname);
-		const std::string trackbar_window_name = "trackbars";
-		namedWindow(trackbar_window_name);
-		createTrackbar("hue start", trackbar_window_name, &hue_start, 179);
-		createTrackbar("hue offset", trackbar_window_name, &hue_offset, 179);
-		createTrackbar("min value", trackbar_window_name, &min_value, 255);
-		createTrackbar("min staturation", trackbar_window_name, &min_saturation, 255);
-		createTrackbar("opening size", trackbar_window_name, &opening_size, 20);
-		createTrackbar("min area percentage", trackbar_window_name, &min_area_perc, 100);
-		createTrackbar("max area percentage", trackbar_window_name, &max_area_perc, 500);
-
-		namedWindow("buttonwindow");
-		setMouseCallback("buttonwindow", detectRoadSignCallback, &src);
-		Mat button = Mat(100, 100, CV_8UC1);
-		imshow("buttonwindow", button);
-
-		detectRoadSignCallback(0, 0, 0, 0, &src);
-		waitKey();
-	}
+	return mask_opened;
 }
 
 std::vector<Rect> markRoadSigns(Mat binary_image, int min_area, int max_area)
@@ -302,10 +294,10 @@ std::vector<Rect> markRoadSigns(Mat binary_image, int min_area, int max_area)
 			continue;
 		}
 
-		int left = stats.at<int>(labelIndex, CC_STAT_LEFT) -3;
-		int top = stats.at<int>(labelIndex, CC_STAT_TOP) -3;
-		int width = stats.at<int>(labelIndex, CC_STAT_WIDTH) + 6;
-		int height = stats.at<int>(labelIndex, CC_STAT_HEIGHT) + 6;
+		int left = stats.at<int>(labelIndex, CC_STAT_LEFT);
+		int top = stats.at<int>(labelIndex, CC_STAT_TOP);
+		int width = stats.at<int>(labelIndex, CC_STAT_WIDTH);
+		int height = stats.at<int>(labelIndex, CC_STAT_HEIGHT);
 		Rect bounding_box = Rect(left, top, width, height);
 		
 		double ratio_h_w = (double)height / width;
@@ -323,6 +315,103 @@ std::vector<Rect> markRoadSigns(Mat binary_image, int min_area, int max_area)
 	}
 
 	return road_sign_boxes;
+}
+
+
+Mat drawBoundingBoxes(Mat src, std::vector<Rect> bounding_boxes)
+{
+	Mat dst = src.clone();
+
+	for (Rect box : bounding_boxes)
+	{
+		rectangle(dst, box, Vec3b(0, 0, 255));
+	}
+
+	return dst;
+}
+
+Mat getConvexHull(Mat src)
+{
+	std::vector<std::vector<Point>> contours;
+	std::vector<Vec4i> hierarchy;
+	findContours(src, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE);
+
+	std::vector<std::vector<Point>> hulls(contours.size());
+
+	for (int i = 0; i < contours.size(); i++)
+	{
+		convexHull(Mat(contours[i]), hulls[i], false);
+	}
+
+	Mat hulls_drawing = Mat::zeros(src.size(), CV_8UC1);
+
+	for(int i = 0; i < hulls.size(); i++)
+	{
+		drawContours(hulls_drawing, hulls, i, Scalar(255), CV_FILLED);
+	}
+	return hulls_drawing;
+}
+
+void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
+{
+	if (event != CV_EVENT_LBUTTONDOWN)
+	{
+		return;
+	}
+
+	Mat src = *(Mat*)data;
+
+	Mat preprocessed = preprocessRoadSign(src);
+
+	//HSV image
+	Mat mask = convertToBinaryColor(preprocessed, hue_start, hue_offset, min_saturation, min_value, max_value);
+
+	Mat post_processed = postProcessBinary(mask);
+
+	Mat convex_hull = getConvexHull(post_processed);
+
+	int total_area = src.rows * src.cols;
+	int min_area = (total_area * min_area_perc) / 1000;
+	int max_area = (total_area * max_area_perc) / 1000;
+	std::vector<Rect> bounding_boxes = markRoadSigns(convex_hull, min_area, max_area);
+
+	Mat labeled = drawBoundingBoxes(src, bounding_boxes);
+	
+	imshow("input image", src);
+	imshow("preprocessed", preprocessed);
+	imshow("mask", mask);
+	imshow("post processed", post_processed);
+	imshow("convex hull", convex_hull);
+	imshow("labeled", labeled);
+}
+
+void guiDetectRoadSign()
+{
+	char fname[MAX_PATH];
+	while (openFileDlg(fname))
+	{
+		Mat src = imread(fname);
+		const std::string trackbar_window_name = "trackbars";
+		namedWindow(trackbar_window_name, WINDOW_GUI_EXPANDED);
+		createTrackbar("hue start", trackbar_window_name, &hue_start, 179);
+		createTrackbar("hue offset", trackbar_window_name, &hue_offset, 179);
+		createTrackbar("min value", trackbar_window_name, &min_value, 255);
+		createTrackbar("min staturation", trackbar_window_name, &min_saturation, 255);
+		createTrackbar("opening size", trackbar_window_name, &opening_size, 20);
+		createTrackbar("min area percentage", trackbar_window_name, &min_area_perc, 100);
+		createTrackbar("max area percentage", trackbar_window_name, &max_area_perc, 500);
+		createTrackbar("bilateral distance", trackbar_window_name, &bilateral_distance, 20);
+		createTrackbar("bilateral color & shape", trackbar_window_name, &bilateral_sigma, 20);
+		createTrackbar("median filter size", trackbar_window_name, &median_filter_size, 10);
+
+		namedWindow("buttonwindow");
+		setMouseCallback("buttonwindow", detectRoadSignCallback, &src);
+		Mat button = Mat(100, 100, CV_8UC1);
+		imshow("buttonwindow", button);
+
+		detectRoadSignCallback(0, 0, 0, 0, &src);
+		waitKey();
+	}
 }
 
 const int red_hue_start = 165;

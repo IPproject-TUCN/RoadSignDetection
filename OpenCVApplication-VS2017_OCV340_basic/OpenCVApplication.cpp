@@ -396,6 +396,7 @@ void guiDetectRoadSign()
 		createTrackbar("hue start", trackbar_window_name, &hue_start, 179);
 		createTrackbar("hue offset", trackbar_window_name, &hue_offset, 179);
 		createTrackbar("min value", trackbar_window_name, &min_value, 255);
+		createTrackbar("max value", trackbar_window_name, &max_value, 255);
 		createTrackbar("min staturation", trackbar_window_name, &min_saturation, 255);
 		createTrackbar("opening size", trackbar_window_name, &opening_size, 20);
 		createTrackbar("min area percentage", trackbar_window_name, &min_area_perc, 100);
@@ -409,7 +410,7 @@ void guiDetectRoadSign()
 		Mat button = Mat(100, 100, CV_8UC1);
 		imshow("buttonwindow", button);
 
-		detectRoadSignCallback(0, 0, 0, 0, &src);
+		detectRoadSignCallback(CV_EVENT_LBUTTONDOWN, 0, 0, 0, &src);
 		waitKey();
 	}
 }

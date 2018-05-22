@@ -195,7 +195,7 @@ int bilateral_distance = 5;
 int bilateral_sigma = 2;
 int median_filter_size = 1;
 
-int min_nr_vertices = 3;
+int min_nr_vertices = 4;
 
 Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturation, int min_value, int max_value = 255)
 {
@@ -337,7 +337,7 @@ Mat getConvexHull(Mat src)
 {
 	std::vector<std::vector<Point>> contours;
 	std::vector<Vec4i> hierarchy;
-	findContours(src, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE);
+	findContours(src.clone(), contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE);
 
 	std::vector<std::vector<Point>> hulls(contours.size());
 
@@ -357,7 +357,8 @@ Mat getConvexHull(Mat src)
 
 bool analyzeIfCircle(Mat convex_hull, Rect bounding_box) {
 
-	Mat image_region = convex_hull(bounding_box);
+	Mat hull_copy = convex_hull.clone();
+	Mat image_region = hull_copy(bounding_box);
 	std::vector<std::vector<Point>> contours;
 	std::vector<Vec4i> hierarchy;
 	findContours(image_region, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
@@ -391,7 +392,8 @@ bool analyzeIfCircle(Mat convex_hull, Rect bounding_box) {
 bool analyzeInnerShape(Mat convex_hull, Rect bounding_box) {
 
 	//taking out the region of interest from the binary 
-	Mat image_region = convex_hull(bounding_box);
+	Mat hull_copy = convex_hull.clone();
+	Mat image_region = hull_copy(bounding_box);
 	std::vector<std::vector<Point>> contours;
 	std::vector<Vec4i> hierarchy;
 	//obtaining contours of object held in the Point type array
@@ -450,7 +452,7 @@ void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
 		else if( analyzeInnerShape(convex_hull, bounding_box)) {
 			final_square_triangle_boxes.push_back(bounding_box);
 		}
-
+		
 	}
 
 	Mat labeled = drawBoundingBoxes(src, final_circle_boxes, Vec3b(0,0,255));

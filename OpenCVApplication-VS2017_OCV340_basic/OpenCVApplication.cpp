@@ -352,6 +352,69 @@ Mat getConvexHull(Mat src)
 	return hulls_drawing;
 }
 
+bool analyzeIfCircle(Mat convex_hull, Rect bounding_box) {
+
+	Mat image_region = convex_hull(bounding_box);
+	std::vector<std::vector<Point>> contours;
+	std::vector<Vec4i> hierarchy;
+	findContours(image_region, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+
+	//displaying the separate contours
+	/*
+	Mat dst = Mat::zeros(image_region.rows, image_region.cols, CV_8UC1);
+	int length = 0;
+	for (int i = 0; i<contours.size(); i++)
+	{
+
+		drawContours(dst, contours, i, 255, 0, 8, hierarchy);
+
+	}
+	imshow("contour", dst);
+	printf("%d\n", contours.size());
+	waitKey();
+	*/
+	
+	//from contour fill area, calc perimeter and thinness ratio
+	std::vector<Point> cnt = contours[0];
+	int area = contourArea(cnt);
+	double perimeter = arcLength(cnt, true);
+	double thinness_ratio = 4 * PI*(area / pow(perimeter, 2));
+	if ((1 - thinness_ratio) < 0.2) {
+		return true;
+	}
+	return false;
+}
+
+bool analyzeInnerShape(Mat convex_hull, Rect bounding_box) {
+
+	//taking out the region of interest from the binary 
+	Mat image_region = convex_hull(bounding_box);
+	std::vector<std::vector<Point>> contours;
+	std::vector<Vec4i> hierarchy;
+	//obtaining contours of object held in the Point type array
+	findContours(image_region, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+
+	//displaying the separate contours
+
+	//Mat dst = Mat::zeros(image_region.rows, image_region.cols, CV_8UC1);
+
+	printf("contour size: %d\n", contours.size());
+	for (int i = 0; i<contours.size(); i++)
+	{
+
+		//drawContours(dst, contours, i, 255, 0, 8, hierarchy);
+
+		std::vector<Point> curve;
+		approxPolyDP(contours[i], curve, 3, true);
+		printf("%d\n", curve.size());
+		if (curve.size() <= 5) {
+			return true;
+		}
+	}
+	return false;
+
+}
+
 void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
 {
 	if (event != CV_EVENT_LBUTTONDOWN)
@@ -374,8 +437,17 @@ void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
 	int min_area = (total_area * min_area_perc) / 1000;
 	int max_area = (total_area * max_area_perc) / 1000;
 	std::vector<Rect> bounding_boxes = markRoadSigns(convex_hull, min_area, max_area);
+	std::vector<Rect> final_bouning_boxes;
 
-	Mat labeled = drawBoundingBoxes(src, bounding_boxes);
+	for (Rect bounding_box : bounding_boxes)
+	{
+		if (analyzeIfCircle(convex_hull, bounding_box) || analyzeInnerShape(convex_hull, bounding_box)) {
+			final_bouning_boxes.push_back(bounding_box);
+		}
+
+	}
+
+	Mat labeled = drawBoundingBoxes(src, final_bouning_boxes);
 	
 	imshow("input image", src);
 	imshow("preprocessed", preprocessed);
@@ -462,48 +534,7 @@ Mat adaptiveColorSegmentation(Mat image, Mat mask)
 	return finalMask;
 }
 
-bool analyzeInnerShape(Rect bounding_box, Mat src, Mat mask_adapted ) {
 
-	//taking out the region of interest from the binary 
-	Mat srcGray, srcBlur, srcCanny;
-	cvtColor(src, srcGray, CV_BGR2GRAY);
-	blur(srcGray, srcBlur, Size(3, 3));
-	Canny(srcBlur, srcCanny, 40, 150, 3, true);
-	Mat image_region = srcCanny(bounding_box);
-	std::vector<std::vector<Point>> contours;
-	std::vector<Vec4i> hierarchy;
-	//obtaining contours of object held in the Point type array
-	findContours(image_region, contours,hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
-
-	//displaying the separate contours
-	
-	Mat dst = Mat::zeros(image_region.rows, image_region.cols, CV_8UC1);
-	
-	
-	int length = 0;
-	for (int i=0; i<contours.size(); i++)
-	{
-		//Scalar color(rand() & 255, rand() & 255, rand() & 255);
-	
-		drawContours(dst, contours, i, 255, 0, 8, hierarchy);
-			
-		std::vector<Point> curve;
-		approxPolyDP(contours[i], curve, 3, true);
-		printf("%d\n",curve.size());
-		if (curve.size() > 20) {
-			return false;
-		}
-		
-		//approxPolyDP()
-	}
-	imshow("contour",dst);
-	printf("\n");
-	waitKey();
-	
-
-	return true;
-
-}
 
 Mat autoDetectRoadSignCore(Mat src)
 {
@@ -544,7 +575,6 @@ Mat autoDetectRoadSignCore(Mat src)
 		std::vector<Rect> signs = markRoadSigns(mask_adapted, min_area, max_area);
 		for(Rect bounding_box : signs)
 		{
-			analyzeInnerShape(bounding_box, src, mask_adapted);
 			rectangle(dst, bounding_box, colors[i]);
 			
 		}
@@ -596,10 +626,9 @@ int main()
 		printf(" 1 - Convert image to binary based on red\n");
 		printf(" 2 - Convert image to binary based on blue\n");
 		printf(" 3 - Convert image to binary based on yellow\n");
-		//printf(" 4 - Convert image to binary based on white\n");
-		printf(" 5 - GUI road sign detection\n");
-		printf(" 6 - Auto road sign detection\n");
-		printf(" 7 - Test sign detection\n");
+		printf(" 4 - GUI road sign detection\n");
+		printf(" 5 - Auto road sign detection\n");
+		printf(" 6 - Test sign detection\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -614,13 +643,13 @@ int main()
 			case 3:
 				convertToBinaryYellow();
 				break;
-			case 5:
+			case 4:
 				guiDetectRoadSign();
 				break;
-			case 6:
+			case 5:
 				autoDetectRoadSign();
 				break;
-			case 7:
+			case 6:
 				testDetectRoadSign();
 				break;
 				

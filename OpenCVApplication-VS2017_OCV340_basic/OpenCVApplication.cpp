@@ -190,9 +190,12 @@ int opening_size = 1;
 int min_area_perc = 1;
 int max_area_perc = 100;
 
+
 int bilateral_distance = 5;
 int bilateral_sigma = 2;
 int median_filter_size = 1;
+
+int min_nr_vertices = 4;
 
 Mat convertToBinaryColor(Mat src, int hue_start, int hue_offset, int min_saturation, int min_value, int max_value = 255)
 {
@@ -318,13 +321,13 @@ std::vector<Rect> markRoadSigns(Mat binary_image, int min_area, int max_area)
 }
 
 
-Mat drawBoundingBoxes(Mat src, std::vector<Rect> bounding_boxes)
+Mat drawBoundingBoxes(Mat src, std::vector<Rect> bounding_boxes, Vec3b color)
 {
 	Mat dst = src.clone();
 
 	for (Rect box : bounding_boxes)
 	{
-		rectangle(dst, box, Vec3b(0, 0, 255));
+		rectangle(dst, box, color);
 	}
 
 	return dst;
@@ -334,7 +337,7 @@ Mat getConvexHull(Mat src)
 {
 	std::vector<std::vector<Point>> contours;
 	std::vector<Vec4i> hierarchy;
-	findContours(src, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE);
+	findContours(src.clone(), contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE);
 
 	std::vector<std::vector<Point>> hulls(contours.size());
 
@@ -354,7 +357,8 @@ Mat getConvexHull(Mat src)
 
 bool analyzeIfCircle(Mat convex_hull, Rect bounding_box) {
 
-	Mat image_region = convex_hull(bounding_box);
+	Mat hull_copy = convex_hull.clone();
+	Mat image_region = hull_copy(bounding_box);
 	std::vector<std::vector<Point>> contours;
 	std::vector<Vec4i> hierarchy;
 	findContours(image_region, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
@@ -388,7 +392,8 @@ bool analyzeIfCircle(Mat convex_hull, Rect bounding_box) {
 bool analyzeInnerShape(Mat convex_hull, Rect bounding_box) {
 
 	//taking out the region of interest from the binary 
-	Mat image_region = convex_hull(bounding_box);
+	Mat hull_copy = convex_hull.clone();
+	Mat image_region = hull_copy(bounding_box);
 	std::vector<std::vector<Point>> contours;
 	std::vector<Vec4i> hierarchy;
 	//obtaining contours of object held in the Point type array
@@ -407,7 +412,7 @@ bool analyzeInnerShape(Mat convex_hull, Rect bounding_box) {
 		std::vector<Point> curve;
 		approxPolyDP(contours[i], curve, 3, true);
 		printf("%d\n", curve.size());
-		if (curve.size() <= 5) {
+		if (curve.size() <= min_nr_vertices) {
 			return true;
 		}
 	}
@@ -437,17 +442,21 @@ void detectRoadSignCallback(int event, int x, int y, int flags, void* data)
 	int min_area = (total_area * min_area_perc) / 1000;
 	int max_area = (total_area * max_area_perc) / 1000;
 	std::vector<Rect> bounding_boxes = markRoadSigns(convex_hull, min_area, max_area);
-	std::vector<Rect> final_bouning_boxes;
+	std::vector<Rect> final_circle_boxes, final_square_triangle_boxes;
 
 	for (Rect bounding_box : bounding_boxes)
 	{
-		if (analyzeIfCircle(convex_hull, bounding_box) || analyzeInnerShape(convex_hull, bounding_box)) {
-			final_bouning_boxes.push_back(bounding_box);
+		if (analyzeIfCircle(convex_hull, bounding_box)) {
+			final_circle_boxes.push_back(bounding_box);
 		}
-
+		else if( analyzeInnerShape(convex_hull, bounding_box)) {
+			final_square_triangle_boxes.push_back(bounding_box);
+		}
+		
 	}
 
-	Mat labeled = drawBoundingBoxes(src, final_bouning_boxes);
+	Mat labeled = drawBoundingBoxes(src, final_circle_boxes, Vec3b(0,0,255));
+	labeled = drawBoundingBoxes(labeled, final_square_triangle_boxes, Vec3b(0,255, 0));
 	
 	imshow("input image", src);
 	imshow("preprocessed", preprocessed);
@@ -476,6 +485,7 @@ void guiDetectRoadSign()
 		createTrackbar("bilateral distance", trackbar_window_name, &bilateral_distance, 20);
 		createTrackbar("bilateral color & shape", trackbar_window_name, &bilateral_sigma, 20);
 		createTrackbar("median filter size", trackbar_window_name, &median_filter_size, 10);
+		createTrackbar("maximum polygon vertices", trackbar_window_name, &min_nr_vertices, 15);
 
 		namedWindow("buttonwindow");
 		setMouseCallback("buttonwindow", detectRoadSignCallback, &src);
